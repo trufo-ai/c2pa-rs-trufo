@@ -535,6 +535,13 @@ impl ValidationResults {
         self
     }
 
+    /// Ensures `ingredientDeltas` is present, as a v3 ingredient assertion with an
+    /// `activeManifest` requires even when there are no deltas.
+    pub(crate) fn ensure_ingredient_deltas(mut self) -> Self {
+        self.ingredient_deltas.get_or_insert_with(Vec::new);
+        self
+    }
+
     /// Returns a summary of why validation failed.
     ///
     /// The `Display` impl outputs a human-readable view of the failures, suitable for error messages.

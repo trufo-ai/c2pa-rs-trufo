@@ -1430,7 +1430,15 @@ impl Ingredient {
             2 => {
                 ingredient_assertion.active_manifest = active_manifest;
                 ingredient_assertion.claim_signature = claim_signature;
-                ingredient_assertion.validation_results = self.validation_results.clone();
+                // C2PA spec 18.16.12.4.3: with an activeManifest, validationResults
+                // shall contain ingredientDeltas
+                let validation_results = self.validation_results.clone();
+                ingredient_assertion.validation_results =
+                    if ingredient_assertion.active_manifest.is_some() {
+                        validation_results.map(ValidationResults::ensure_ingredient_deltas)
+                    } else {
+                        validation_results
+                    };
                 ingredient_assertion.digital_source_type = self.digital_source_type.clone();
             }
             _ => {}
