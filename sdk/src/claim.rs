@@ -1426,7 +1426,23 @@ impl Claim {
         &mut self,
         assertion_builder: &impl AssertionBase,
     ) -> Result<C2PAAssertion> {
-        self.add_assertion_impl(assertion_builder, &DefaultSalt::default(), false)
+        self.add_assertion_impl(assertion_builder, &DefaultSalt::default(), None)
+    }
+
+    /// Same as add_assertion but with an explicit placement for Claims V2:
+    /// Some(true) forces created_assertions, Some(false) forces gathered_assertions,
+    /// and None uses the created_assertion_labels setting. Hash assertions are
+    /// always created.
+    pub(crate) fn add_assertion_with_placement(
+        &mut self,
+        assertion_builder: &impl AssertionBase,
+        add_as_created_assertion: Option<bool>,
+    ) -> Result<C2PAAssertion> {
+        self.add_assertion_impl(
+            assertion_builder,
+            &DefaultSalt::default(),
+            add_as_created_assertion,
+        )
     }
 
     /// Same as add_assertion but forces addition to created_assertions for Claims V2
@@ -1434,7 +1450,7 @@ impl Claim {
         &mut self,
         assertion_builder: &impl AssertionBase,
     ) -> Result<C2PAAssertion> {
-        self.add_assertion_impl(assertion_builder, &DefaultSalt::default(), true)
+        self.add_assertion_impl(assertion_builder, &DefaultSalt::default(), Some(true))
     }
 
     fn compatibility_checks(&self, assertion: &Assertion) -> Result<()> {
@@ -1484,11 +1500,13 @@ impl Claim {
     fn claim_assertion_type(
         &self,
         base_label: &str,
-        add_as_created_assertion: bool,
+        add_as_created_assertion: Option<bool>,
     ) -> ClaimAssertionType {
         if self.version() > 1 {
-            if labels::HASH_LABELS.contains(&base_label) || add_as_created_assertion {
+            if labels::HASH_LABELS.contains(&base_label) || add_as_created_assertion == Some(true) {
                 ClaimAssertionType::Created
+            } else if add_as_created_assertion == Some(false) {
+                ClaimAssertionType::Gathered
             } else if let Some(created_assertions) = self
                 .context
                 .as_ref()
@@ -1513,7 +1531,7 @@ impl Claim {
         &mut self,
         assertion_builder: &impl AssertionBase,
         salt_generator: &impl SaltGenerator,
-        add_as_created_assertion: bool,
+        add_as_created_assertion: Option<bool>,
     ) -> Result<C2PAAssertion> {
         // Enforce the per-manifest assertion limit to prevent resource exhaustion
         // regardless of how the claim is constructed.

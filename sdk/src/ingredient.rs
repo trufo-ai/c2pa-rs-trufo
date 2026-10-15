@@ -144,6 +144,10 @@ pub struct Ingredient {
     #[serde(skip_serializing_if = "Option::is_none")]
     data_types: Option<Vec<AssetType>>,
 
+    /// Claim-list placement of the ingredient assertion, see `Claim::add_assertion_with_placement`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created: Option<bool>,
+
     /// A [`ManifestStore`] from the source asset extracted as a binary C2PA blob.
     ///
     /// [`ManifestStore`]: crate::ManifestStore
@@ -1442,7 +1446,7 @@ impl Ingredient {
             .informational_uri
             .clone_from(&self.informational_uri);
         ingredient_assertion.data_types.clone_from(&self.data_types);
-        claim.add_assertion(&ingredient_assertion)
+        claim.add_assertion_with_placement(&ingredient_assertion, self.created)
     }
 
     /// Asynchronously create an Ingredient from a binary manifest (.c2pa) and asset bytes,
@@ -1616,6 +1620,9 @@ impl Ingredient {
         }
         if let Some(metadata) = &other.metadata {
             self.metadata = Some(metadata.clone());
+        }
+        if let Some(created) = other.created {
+            self.created = Some(created);
         }
         if let Some(label) = &other.label {
             self.label = Some(label.clone());
