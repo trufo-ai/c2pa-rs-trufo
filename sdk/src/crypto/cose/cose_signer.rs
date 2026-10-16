@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use c2pa_raw_crypto::{RawSigner, RawSignerError, SigningAlg};
 
 use crate::{
-    crypto::time_stamp::{AsyncTimeStampProvider, TimeStampProvider},
+    crypto::time_stamp::{AsyncTimeStampProvider, TimeStampError, TimeStampProvider},
     maybe_send_sync::{MaybeSend, MaybeSync},
 };
 
@@ -70,17 +70,26 @@ pub(crate) trait AsyncCoseSigner: AsyncTimeStampProvider + MaybeSync + MaybeSend
 /// [`CoseSigner`].
 ///
 /// The raw signer carries no certificate chain, time stamp service, or OCSP
-/// information, so the chain is supplied here and the resulting COSE signature
-/// has no time stamp or OCSP. (Those are configured at higher layers when
-/// needed.)
+/// information, so the chain and an optional time stamp provider are supplied
+/// here. The resulting COSE signature has a time stamp only when a provider is
+/// supplied, and no OCSP.
 pub(crate) struct RawSignerCoseSigner<'a> {
     signer: &'a dyn RawSigner,
     cert_chain: &'a [Vec<u8>],
+    time_stamp_provider: Option<&'a dyn TimeStampProvider>,
 }
 
 impl<'a> RawSignerCoseSigner<'a> {
-    pub(crate) fn new(signer: &'a dyn RawSigner, cert_chain: &'a [Vec<u8>]) -> Self {
-        Self { signer, cert_chain }
+    pub(crate) fn new(
+        signer: &'a dyn RawSigner,
+        cert_chain: &'a [Vec<u8>],
+        time_stamp_provider: Option<&'a dyn TimeStampProvider>,
+    ) -> Self {
+        Self {
+            signer,
+            cert_chain,
+            time_stamp_provider,
+        }
     }
 }
 
@@ -98,4 +107,8 @@ impl CoseSigner for RawSignerCoseSigner<'_> {
     }
 }
 
-impl TimeStampProvider for RawSignerCoseSigner<'_> {}
+impl TimeStampProvider for RawSignerCoseSigner<'_> {
+    fn send_time_stamp_request(&self, message: &[u8]) -> Option<Result<Vec<u8>, TimeStampError>> {
+        self.time_stamp_provider?.send_time_stamp_request(message)
+    }
+}

@@ -100,7 +100,7 @@ impl AsyncCredentialHolder for AsyncX509CredentialHolder {
         // Raw signing is synchronous (CPU-bound), so the synchronous COSE
         // signer is used here even on the async credential-holder path.
         Ok(sign(
-            &RawSignerCoseSigner::new(self.signer.as_ref(), &self.cert_chain),
+            &RawSignerCoseSigner::new(self.signer.as_ref(), &self.cert_chain, None),
             &sp_cbor,
             None,
             TimeStampStorage::V2_sigTst2_CTT,
