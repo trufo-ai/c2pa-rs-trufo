@@ -178,6 +178,42 @@ fn test_reader_unnamed_trust_list_has_no_trust_list_uri() -> Result<()> {
     Ok(())
 }
 
+/// A trust list configured only as `trust_kind: cawg` does not trust the claim signer.
+#[test]
+fn test_reader_cawg_trust_list_does_not_trust_claim_signer() -> Result<()> {
+    let settings = Settings::new().with_json(
+        &serde_json::json!({
+            "trust": {
+                "anchors": [{
+                    "trust_kind": "cawg",
+                    "trust_anchors": include_str!("fixtures/certs/trust/test_cert_root_bundle.pem")
+                }]
+            }
+        })
+        .to_string(),
+    )?;
+    let context = Context::new().with_settings(settings)?;
+
+    let (format, mut stream) = fixture_stream("CA.jpg")?;
+    let reader = Reader::from_context(context).with_stream(&format, &mut stream)?;
+
+    let results = reader
+        .validation_results()
+        .unwrap()
+        .active_manifest()
+        .unwrap();
+    assert!(results
+        .failure()
+        .iter()
+        .any(|status| status.code() == validation_status::SIGNING_CREDENTIAL_UNTRUSTED));
+    assert!(!results
+        .success()
+        .iter()
+        .any(|status| status.code() == validation_status::SIGNING_CREDENTIAL_TRUSTED));
+
+    Ok(())
+}
+
 // ── format-detection tests ────────────────────────────────────────────────────
 
 /// with_stream should succeed even when the caller supplies the wrong MIME type,

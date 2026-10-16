@@ -169,7 +169,7 @@ impl Store {
         // use the incoming trust settings
         store.ctp.clear();
 
-        // Add all of the trust anchors
+        // Add the manifest and TSA trust anchors
         if let Some(anchors) = &settings.trust.anchors {
             for anchor in anchors {
                 let trust_list_uri = match &anchor.trust_uri {
@@ -187,7 +187,9 @@ impl Store {
                 let trust_list_type = match anchor.trust_kind {
                     TrustListKind::Manifest => TrustAnchorType::Manifest,
                     TrustListKind::TSA => TrustAnchorType::TSA,
-                    TrustListKind::CAWG => TrustAnchorType::CAWG,
+                    // CAWG anchors are read from the settings by the CAWG identity validators
+                    // and must not trust C2PA signers, time stamps or OCSP responses
+                    TrustListKind::CAWG => continue,
                 };
 
                 // Anchors are pre-validated when loading the settings
