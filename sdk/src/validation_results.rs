@@ -27,7 +27,7 @@ use crate::{
     jumbf::labels::{self, manifest_label_from_uri},
     spec_versions::C2PA_VALIDATOR_VERSION,
     status_tracker::{LogKind, StatusTracker},
-    store::Store,
+    store::{Store, UNKNOWN_TRUST_LIST_URI_PREFIX},
     validation_status::{self, log_kind, ValidationStatus},
 };
 
@@ -221,8 +221,10 @@ impl ValidationResults {
             if status.code() == validation_status::SIGNING_CREDENTIAL_TRUSTED {
                 if let Some(trust_list_uri) = status.trust_list_uri() {
                     if let Some(item_uri) = status.url() {
-                        // Filter out CAWG results
-                        if item_uri.ends_with(labels::SIGNATURE) {
+                        // Filter out CAWG results and trust lists configured without a URI
+                        if item_uri.ends_with(labels::SIGNATURE)
+                            && !trust_list_uri.starts_with(UNKNOWN_TRUST_LIST_URI_PREFIX)
+                        {
                             results.trust_list_uri = Some(trust_list_uri.into());
                         }
                     }
