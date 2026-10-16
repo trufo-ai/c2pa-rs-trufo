@@ -96,6 +96,11 @@ const DEFAULT_MANIFEST_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 /// A shared-subtree DAG can have short paths yet exponentially many paths through it.
 const MAX_INGREDIENT_DEPTH: usize = 200;
 
+/// Prefix of the URI generated for a trust list configured without a `trust_uri`.
+///
+/// The generated URI only keys the trust anchor set; it is not reported as `trustListUri`.
+pub(crate) const UNKNOWN_TRUST_LIST_URI_PREFIX: &str = "https://c2pa-rs/unknown_trust_list_";
+
 pub(crate) struct ManifestHashes {
     pub manifest_box_hash: Vec<u8>,
     pub signature_box_hash: Vec<u8>,
@@ -170,7 +175,7 @@ impl Store {
                 let trust_list_uri = match &anchor.trust_uri {
                     Some(uri) => uri.to_string(),
                     None => format!(
-                        "https://c2pa-rs/unknown_trust_list_{}",
+                        "{UNKNOWN_TRUST_LIST_URI_PREFIX}{}",
                         extfmt::Hexlify(&hash_by_alg(
                             "sha256",
                             anchor.trust_anchors.as_bytes(),

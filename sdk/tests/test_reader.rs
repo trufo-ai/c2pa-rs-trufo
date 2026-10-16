@@ -147,6 +147,37 @@ fn test_reader_validation_state_uses_context_settings() -> Result<()> {
     Ok(())
 }
 
+/// A trust list configured without a `trust_uri` still trusts the signer, and the URI
+/// generated for it internally is not reported as `trustListUri`.
+#[test]
+fn test_reader_unnamed_trust_list_has_no_trust_list_uri() -> Result<()> {
+    let settings = Settings::new().with_json(
+        &serde_json::json!({
+            "trust": {
+                "anchors": [{
+                    "trust_kind": "manifest",
+                    "trust_anchors": include_str!("fixtures/certs/trust/test_cert_root_bundle.pem")
+                }]
+            }
+        })
+        .to_string(),
+    )?;
+    let context = Context::new().with_settings(settings)?;
+
+    let (format, mut stream) = fixture_stream("CA.jpg")?;
+    let reader = Reader::from_context(context).with_stream(&format, &mut stream)?;
+
+    let results = serde_json::to_value(reader.validation_results().unwrap())?;
+    assert!(results["activeManifest"]["success"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|status| status["code"] == validation_status::SIGNING_CREDENTIAL_TRUSTED));
+    assert_eq!(results.get("trustListUri"), None);
+
+    Ok(())
+}
+
 // ── format-detection tests ────────────────────────────────────────────────────
 
 /// with_stream should succeed even when the caller supplies the wrong MIME type,
