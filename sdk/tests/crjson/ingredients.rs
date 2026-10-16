@@ -15,9 +15,18 @@
 
 use std::io::Cursor;
 
-use c2pa::{Reader, Result};
+use c2pa::{Builder, BuilderIntent, Context, DigitalSourceType, Reader, Result};
+use serde_json::Value;
+
+use super::super::common::{test_context, test_settings, test_signer};
 
 const IMAGE_WITH_INGREDIENT: &[u8] = include_bytes!("../fixtures/CA.jpg");
+// CA.jpg as the parent ingredient: the ingredient assertion records CA.jpg's
+// results at ingest, signingCredential.untrusted among them
+const IMAGE_WITH_INGREDIENT_MANIFEST: &[u8] = include_bytes!("../fixtures/CACA.jpg");
+// a v2 ingredient assertion recording claimSignature.mismatch for its manifest
+const IMAGE_WITH_BAD_INGREDIENT_SIGNATURE: &[u8] = include_bytes!("../fixtures/CIE-sig-CA.jpg");
+const IMAGE_WITHOUT_MANIFEST: &[u8] = include_bytes!("../fixtures/no_manifest.jpg");
 
 #[test]
 fn test_ingredient_assertions_included() -> Result<()> {
@@ -315,4 +324,138 @@ fn test_ingredient_label_matches_version() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[test]
+fn test_ingredient_manifest_reports_recorded_results() -> Result<()> {
+    let reader =
+        Reader::default().with_stream("image/jpeg", Cursor::new(IMAGE_WITH_INGREDIENT_MANIFEST))?;
+    let json_value = reader.to_crjson_value()?;
+
+    // every status recorded in the active manifest's ingredient assertion is
+    // reported on the ingredient's manifest
+    let ingredient = &json_value["manifests"][0]["assertions"]["c2pa.ingredient.v3"];
+    let label = ingredient["activeManifest"]["url"]
+        .as_str()
+        .and_then(|url| url.strip_prefix("self#jumbf=/c2pa/"))
+        .expect("ingredient should reference a manifest");
+    let recorded = &ingredient["validationResults"]["activeManifest"];
+    let reported = &manifest_by_label(&json_value, label)["validationResults"];
+    for kind in ["success", "informational", "failure"] {
+        let reported_kind = reported[kind]
+            .as_array()
+            .expect("reported codes should be array");
+        for status in recorded[kind]
+            .as_array()
+            .expect("recorded codes should be array")
+        {
+            assert!(
+                reported_kind.contains(status),
+                "recorded {kind} status not reported: {status}"
+            );
+        }
+    }
+
+    // the read-time delta is merged on top
+    assert!(
+        reported["success"]
+            .as_array()
+            .expect("reported codes should be array")
+            .iter()
+            .any(|status| status["code"] == "ingredient.manifest.validated"),
+        "read-time ingredient.manifest.validated should be reported"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_ingredient_manifest_reports_recorded_validation_status() -> Result<()> {
+    // read-time validation finds the recorded mismatch again
+    let reader = Reader::default().with_stream(
+        "image/jpeg",
+        Cursor::new(IMAGE_WITH_BAD_INGREDIENT_SIGNATURE),
+    )?;
+    let json_value = reader.to_crjson_value()?;
+    let label = "contentauth:urn:uuid:bc347336-f111-4c34-82da-a970150c5490";
+    let failures = &manifest_by_label(&json_value, label)["validationResults"]["failure"];
+    assert!(failures
+        .as_array()
+        .expect("failure codes should be array")
+        .iter()
+        .any(|status| status["code"] == "claimSignature.mismatch"));
+    Ok(())
+}
+
+#[test]
+fn test_ingredient_manifest_reports_records_from_every_assertion() -> Result<()> {
+    // M2 records M1 as untrusted, M3 records M1 as trusted
+    let m1 = sign_with_ingredients(test_context(), &[])?;
+    let m2 = sign_with_ingredients(untrusting_context()?, &[&m1])?;
+    let m3 = sign_with_ingredients(test_context(), &[&m2, &m1])?;
+
+    let codes = reported_codes(&m3, &m1)?;
+    assert!(codes.contains(&"signingCredential.untrusted".into()));
+    assert!(codes.contains(&"signingCredential.trusted".into()));
+    Ok(())
+}
+
+#[test]
+fn test_ingredient_manifest_reports_recorded_deltas() -> Result<()> {
+    // M2 records M1 as trusted, M3 records M1 as untrusted in a delta on M2's
+    // ingredient assertion
+    let m1 = sign_with_ingredients(test_context(), &[])?;
+    let m2 = sign_with_ingredients(test_context(), &[&m1])?;
+    let m3 = sign_with_ingredients(untrusting_context()?, &[&m2])?;
+
+    let codes = reported_codes(&m3, &m1)?;
+    assert!(codes.contains(&"signingCredential.untrusted".into()));
+    Ok(())
+}
+
+/// The test context without the test signing certificate's trust anchors.
+fn untrusting_context() -> Result<Context> {
+    let mut settings = test_settings();
+    settings.trust.anchors = None;
+    Context::new().with_settings(settings)
+}
+
+/// Sign a JPEG under `context` with each of `ingredients` as an ingredient.
+fn sign_with_ingredients(context: Context, ingredients: &[&[u8]]) -> Result<Vec<u8>> {
+    let mut builder = Builder::from_context(context);
+    builder.set_intent(BuilderIntent::Create(DigitalSourceType::Empty));
+    for ingredient in ingredients {
+        builder.add_ingredient_from_stream("{}", "image/jpeg", &mut Cursor::new(ingredient))?;
+    }
+    let mut source = Cursor::new(IMAGE_WITHOUT_MANIFEST);
+    let mut output = Cursor::new(Vec::new());
+    builder.sign(&test_signer(), "image/jpeg", &mut source, &mut output)?;
+    Ok(output.into_inner())
+}
+
+/// The codes `asset`'s crJSON reports for `ingredient`'s manifest, read trusting.
+fn reported_codes(asset: &[u8], ingredient: &[u8]) -> Result<Vec<Value>> {
+    let reader =
+        Reader::from_context(test_context()).with_stream("image/jpeg", Cursor::new(ingredient))?;
+    let label = reader
+        .active_label()
+        .expect("ingredient should have a manifest");
+    let json_value = Reader::from_context(test_context())
+        .with_stream("image/jpeg", Cursor::new(asset))?
+        .to_crjson_value()?;
+    let results = &manifest_by_label(&json_value, label)["validationResults"];
+    Ok(["success", "informational", "failure"]
+        .iter()
+        .flat_map(|kind| results[kind].as_array().expect("codes should be array"))
+        .map(|status| status["code"].clone())
+        .collect())
+}
+
+fn manifest_by_label<'a>(json_value: &'a Value, label: &str) -> &'a Value {
+    json_value["manifests"]
+        .as_array()
+        .expect("manifests should be array")
+        .iter()
+        .find(|manifest| manifest["label"] == label)
+        .expect("manifest should be reported")
 }

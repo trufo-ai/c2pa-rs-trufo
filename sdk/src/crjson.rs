@@ -38,8 +38,8 @@ use crate::{
     jumbf::labels::{manifest_label_from_uri, to_absolute_uri, to_assertion_uri},
     reader::Reader,
     status_tracker::StatusTracker,
-    validation_results::{IngredientDeltaValidationResult, StatusCodes},
-    validation_status::ValidationStatus,
+    validation_results::{referenced_claim_labels, IngredientDeltaValidationResult, StatusCodes},
+    validation_status::{log_kind, ValidationStatus},
 };
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -515,6 +515,54 @@ impl<'a> CrJsonExporter<'a> {
             map.insert(active_label.to_string(), (codes, validation_time.clone()));
         }
 
+        // an ingredient manifest's results are the entries recorded about it in
+        // ingredient assertions, recorded ingredientDeltas included, plus the
+        // read-time entries not among them (C2PA 2.4 §15.11.3.3), which are what
+        // the reader's deltas hold
+        let referenced = referenced_claim_labels(&self.reader.store);
+        for ingredient in self
+            .reader
+            .store
+            .claims()
+            .iter()
+            .filter(|c| referenced.contains(c.label()))
+            .flat_map(|c| c.ingredient_assertions())
+            .filter_map(|a| Ingredient::from_assertion(a.assertion()).ok())
+        {
+            let Some(target_label) = ingredient
+                .c2pa_manifest()
+                .and_then(|hashed| manifest_label_from_uri(&hashed.url()))
+            else {
+                continue;
+            };
+            if let Some(results) = &ingredient.validation_results {
+                if let Some(codes) = results.active_manifest() {
+                    merge_status_codes(&mut map, target_label.clone(), codes, &validation_time);
+                }
+                for idv in results.ingredient_deltas().into_iter().flatten() {
+                    let Some(delta_label) = self
+                        .ingredient_assertion_uri_to_manifest_label(idv.ingredient_assertion_uri())
+                    else {
+                        continue;
+                    };
+                    merge_status_codes(
+                        &mut map,
+                        delta_label,
+                        idv.validation_deltas(),
+                        &validation_time,
+                    );
+                }
+            } else if let Some(statuses) = &ingredient.validation_status {
+                // v1 and v2 ingredients record a flat list, sorted here by kind
+                // as the reader sorts it
+                let mut codes = StatusCodes::default();
+                for status in statuses {
+                    codes.add_status(status.clone().set_kind(log_kind(status.code())));
+                }
+                merge_status_codes(&mut map, target_label, &codes, &validation_time);
+            }
+        }
+
         let Some(deltas) = vr.ingredient_deltas() else {
             return map;
         };
@@ -524,8 +572,12 @@ impl<'a> CrJsonExporter<'a> {
             else {
                 continue;
             };
-            let codes = idv.validation_deltas().clone();
-            map.insert(target_label, (codes, validation_time.clone()));
+            merge_status_codes(
+                &mut map,
+                target_label,
+                idv.validation_deltas(),
+                &validation_time,
+            );
         }
         map
     }
@@ -640,6 +692,34 @@ fn build_assertion_refs(
         .collect();
 
     (Vec::new(), created, gathered)
+}
+
+/// Add `codes` to the entry for `label`, skipping any status the entry already
+/// holds with the same code and url in the same category.
+fn merge_status_codes(
+    map: &mut HashMap<String, (StatusCodes, String)>,
+    label: String,
+    codes: &StatusCodes,
+    validation_time: &str,
+) {
+    let (merged, _) = map
+        .entry(label)
+        .or_insert_with(|| (StatusCodes::default(), validation_time.to_string()));
+    for (existing, statuses) in [
+        (&mut merged.success, &codes.success),
+        (&mut merged.informational, &codes.informational),
+        (&mut merged.failure, &codes.failure),
+    ] {
+        for status in statuses {
+            // not PartialEq: kind is not serialized, so recorded statuses lack it
+            if !existing
+                .iter()
+                .any(|s| s.code() == status.code() && s.url() == status.url())
+            {
+                existing.push(status.clone());
+            }
+        }
+    }
 }
 
 fn build_manifest_validation_results(

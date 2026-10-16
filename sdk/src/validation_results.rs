@@ -174,7 +174,7 @@ fn is_tolerated_manifest_failure_code(code: &str) -> bool {
 /// ingredient assertions. Claims outside this set are in the store but not part of
 /// the verified provenance, so their ingredient assertions must not take part in
 /// validation-status reconciliation.
-fn referenced_claim_labels(store: &Store) -> HashSet<String> {
+pub(crate) fn referenced_claim_labels(store: &Store) -> HashSet<String> {
     let mut referenced = HashSet::new();
     let Some(active) = store.provenance_claim() else {
         return referenced;
