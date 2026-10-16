@@ -144,6 +144,10 @@ pub struct Ingredient {
     #[serde(skip_serializing_if = "Option::is_none")]
     data_types: Option<Vec<AssetType>>,
 
+    /// Claim-list placement of the ingredient assertion, see `Claim::add_assertion_with_placement`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    created: Option<bool>,
+
     /// A [`ManifestStore`] from the source asset extracted as a binary C2PA blob.
     ///
     /// [`ManifestStore`]: crate::ManifestStore
@@ -1426,7 +1430,15 @@ impl Ingredient {
             2 => {
                 ingredient_assertion.active_manifest = active_manifest;
                 ingredient_assertion.claim_signature = claim_signature;
-                ingredient_assertion.validation_results = self.validation_results.clone();
+                // C2PA spec 18.16.12.4.3: with an activeManifest, validationResults
+                // shall contain ingredientDeltas
+                let validation_results = self.validation_results.clone();
+                ingredient_assertion.validation_results =
+                    if ingredient_assertion.active_manifest.is_some() {
+                        validation_results.map(ValidationResults::ensure_ingredient_deltas)
+                    } else {
+                        validation_results
+                    };
                 ingredient_assertion.digital_source_type = self.digital_source_type.clone();
             }
             _ => {}
@@ -1442,7 +1454,7 @@ impl Ingredient {
             .informational_uri
             .clone_from(&self.informational_uri);
         ingredient_assertion.data_types.clone_from(&self.data_types);
-        claim.add_assertion(&ingredient_assertion)
+        claim.add_assertion_with_placement(&ingredient_assertion, self.created)
     }
 
     /// Asynchronously create an Ingredient from a binary manifest (.c2pa) and asset bytes,
@@ -1616,6 +1628,9 @@ impl Ingredient {
         }
         if let Some(metadata) = &other.metadata {
             self.metadata = Some(metadata.clone());
+        }
+        if let Some(created) = other.created {
+            self.created = Some(created);
         }
         if let Some(label) = &other.label {
             self.label = Some(label.clone());

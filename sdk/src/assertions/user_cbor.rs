@@ -46,7 +46,12 @@ impl AssertionBase for UserCbor {
         let _value: c2pa_cbor::Value = c2pa_cbor::from_slice(&self.cbor_data)
             .map_err(|err| Error::AssertionEncoding(err.to_string()))?;
         let data = AssertionData::Cbor(self.cbor_data.clone());
-        Ok(Assertion::new(&self.label, None, data))
+        // a versioned label ("x.v2") must carry its version into the
+        // assertion: label() recomputes from the version-stripped root, so
+        // without this a user-supplied "c2pa.asset-type.v2" would be written
+        // out as the deprecated unversioned form
+        let version = crate::assertions::labels::version(&self.label);
+        Ok(Assertion::new(&self.label, Some(version), data))
     }
 
     fn from_assertion(assertion: &Assertion) -> Result<Self> {
@@ -88,6 +93,16 @@ pub mod tests {
         assert_eq!(assertion.label(), LABEL);
         let result = UserCbor::from_assertion(&assertion).expect("from_assertion");
         assert_eq!(original.cbor_data, result.cbor_data);
+    }
+
+    #[test]
+    fn assertion_user_cbor_versioned_label_survives() {
+        let json: serde_json::Value = serde_json::from_str(DATA).unwrap();
+        let data = c2pa_cbor::to_vec(&json).unwrap();
+        let assertion = UserCbor::new("c2pa.asset-type.v2", data)
+            .to_assertion()
+            .expect("build_assertion");
+        assert_eq!(assertion.label(), "c2pa.asset-type.v2");
     }
 
     #[test]
