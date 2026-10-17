@@ -45,7 +45,7 @@ use crate::{
 // ── Constants ───────────────────────────────────────────────────────────────
 
 /// Version of the crJSON specification implemented by this exporter.
-const CRJSON_SPEC_VERSION: &str = "2.3.0";
+const CRJSON_SPEC_VERSION: &str = "2.4.0";
 
 // ── Output types ────────────────────────────────────────────────────────────
 
