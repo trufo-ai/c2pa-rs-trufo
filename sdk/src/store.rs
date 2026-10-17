@@ -41,7 +41,7 @@ use crate::{
         cose::{
             cert_chain_from_sign1, fetch_and_check_ocsp_response,
             fetch_and_check_ocsp_response_async, parse_cose_sign1, CertificateTrustPolicy,
-            TimeStampStorage, TrustAnchorType,
+            TimeStampStorage, TrustAnchorType, UNKNOWN_TRUST_LIST_URI_PREFIX,
         },
         hash::sha256,
         ocsp::OcspResponse,
@@ -95,11 +95,6 @@ const DEFAULT_MANIFEST_RESPONSE_SIZE: usize = 10 * 1024 * 1024; // 10 MB
 /// Bounds path length only: independent of the `visited` memoization in `ingredient_checks`.
 /// A shared-subtree DAG can have short paths yet exponentially many paths through it.
 const MAX_INGREDIENT_DEPTH: usize = 200;
-
-/// Prefix of the URI generated for a trust list configured without a `trust_uri`.
-///
-/// The generated URI only keys the trust anchor set; it is not reported as `trustListUri`.
-pub(crate) const UNKNOWN_TRUST_LIST_URI_PREFIX: &str = "https://c2pa-rs/unknown_trust_list_";
 
 pub(crate) struct ManifestHashes {
     pub manifest_box_hash: Vec<u8>,

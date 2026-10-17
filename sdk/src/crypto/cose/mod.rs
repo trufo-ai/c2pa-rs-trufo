@@ -24,6 +24,9 @@ mod cose_signer;
 pub(crate) use cose_signer::{AsyncCoseSigner, CoseSigner, RawSignerCoseSigner};
 
 mod certificate_trust_policy;
+pub(crate) use certificate_trust_policy::{
+    configured_trust_list_uri, UNKNOWN_TRUST_LIST_URI_PREFIX,
+};
 pub use certificate_trust_policy::{
     CertificateTrustError, CertificateTrustPolicy, InvalidCertificateError, TrustAnchorType,
 };
