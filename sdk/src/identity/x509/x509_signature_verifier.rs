@@ -566,7 +566,7 @@ mod tests {
         // a match against the default test anchors would name their URI instead.
         assert_eq!(
             trusted.explanation().unwrap_or(""),
-            "signing certificate trusted, found in [] trust anchors"
+            "signing certificate trusted"
         );
     }
 }

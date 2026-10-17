@@ -27,7 +27,9 @@ use sha2::{Sha256, Sha384, Sha512};
 use crate::{
     crypto::{
         asn1::rfc3161::{Accuracy, TstInfo},
-        cose::{check_end_entity_certificate_profile, CertificateTrustPolicy},
+        cose::{
+            check_end_entity_certificate_profile, configured_trust_list_uri, CertificateTrustPolicy,
+        },
         time_stamp::{
             response::{signed_data_from_time_stamp_response, tst_info_from_signed_data},
             TimeStampError,
@@ -538,17 +540,16 @@ pub fn verify_time_stamp(
                     continue;
                 }
                 Ok((_trust_type, trust_uri)) => {
-                    log_item!(
-                        "",
-                        format!(
-                            "timestamp cert trusted: {}, trust list: {}",
-                            &common_name, &trust_uri
-                        ),
-                        "verify_time_stamp"
-                    )
-                    .validation_status(TIMESTAMP_TRUSTED)
-                    .set_trust_list_uri(&trust_uri)
-                    .success(&mut current_validation_log);
+                    let explanation = match configured_trust_list_uri(&trust_uri) {
+                        Some(uri) => {
+                            format!("timestamp cert trusted: {common_name}, trust list: {uri}")
+                        }
+                        None => format!("timestamp cert trusted: {common_name}"),
+                    };
+                    log_item!("", explanation, "verify_time_stamp")
+                        .validation_status(TIMESTAMP_TRUSTED)
+                        .set_trust_list_uri(&trust_uri)
+                        .success(&mut current_validation_log);
 
                     validation_log.append(&current_validation_log);
                     return Ok(tst);

@@ -28,9 +28,9 @@ use crate::{
         asn1::rfc3161::TstInfo,
         base64::encode,
         cose::{
-            cert_chain_from_sign1, check_end_entity_certificate_profile, parse_cose_sign1,
-            signing_alg_from_sign1, CertificateInfo, CertificateTrustPolicy, CoseError,
-            TrustAnchorType,
+            cert_chain_from_sign1, check_end_entity_certificate_profile, configured_trust_list_uri,
+            parse_cose_sign1, signing_alg_from_sign1, CertificateInfo, CertificateTrustPolicy,
+            CoseError, TrustAnchorType,
         },
     },
     log_item,
@@ -319,17 +319,16 @@ impl Verifier<'_> {
 
         match verify_result {
             Ok((tat, trust_uri)) => {
-                log_item!(
-                    "",
-                    format!(
-                        "signing certificate trusted, found in [{}] trust anchors",
-                        &trust_uri
-                    ),
-                    "verify_cose"
-                )
-                .validation_status(SIGNING_CREDENTIAL_TRUSTED)
-                .set_trust_list_uri(&trust_uri)
-                .success(validation_log);
+                let explanation = match configured_trust_list_uri(&trust_uri) {
+                    Some(uri) => {
+                        format!("signing certificate trusted, found in [{uri}] trust anchors")
+                    }
+                    None => "signing certificate trusted".to_string(),
+                };
+                log_item!("", explanation, "verify_cose")
+                    .validation_status(SIGNING_CREDENTIAL_TRUSTED)
+                    .set_trust_list_uri(&trust_uri)
+                    .success(validation_log);
 
                 Ok((tat, Some(trust_uri)))
             }

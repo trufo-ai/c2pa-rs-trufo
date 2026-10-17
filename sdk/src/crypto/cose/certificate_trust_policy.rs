@@ -67,6 +67,16 @@ pub struct TrustAnchor {
     pub trust_config: Option<String>,
 }
 
+/// Prefix of the URI generated for a trust list configured without a `trust_uri`.
+///
+/// The generated URI only keys the trust anchor set; it is not reported.
+pub(crate) const UNKNOWN_TRUST_LIST_URI_PREFIX: &str = "https://c2pa-rs/unknown_trust_list_";
+
+/// Returns the trust list URI if one was configured, or `None` if it is empty or generated.
+pub(crate) fn configured_trust_list_uri(uri: &str) -> Option<&str> {
+    (!uri.is_empty() && !uri.starts_with(UNKNOWN_TRUST_LIST_URI_PREFIX)).then_some(uri)
+}
+
 /// A `CertificateTrustPolicy` is configured with information about trust
 /// anchors, privately-accepted end-entity certificates, and allowed EKUs. It
 /// can be used to evaluate a signing certificate against those policies.

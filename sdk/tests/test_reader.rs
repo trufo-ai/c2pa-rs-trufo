@@ -148,7 +148,7 @@ fn test_reader_validation_state_uses_context_settings() -> Result<()> {
 }
 
 /// A trust list configured without a `trust_uri` still trusts the signer, and the URI
-/// generated for it internally is not reported as `trustListUri`.
+/// generated for it internally is not reported as `trustListUri` or named in the explanation.
 #[test]
 fn test_reader_unnamed_trust_list_has_no_trust_list_uri() -> Result<()> {
     let settings = Settings::new().with_json(
@@ -168,11 +168,13 @@ fn test_reader_unnamed_trust_list_has_no_trust_list_uri() -> Result<()> {
     let reader = Reader::from_context(context).with_stream(&format, &mut stream)?;
 
     let results = serde_json::to_value(reader.validation_results().unwrap())?;
-    assert!(results["activeManifest"]["success"]
+    let trusted = results["activeManifest"]["success"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|status| status["code"] == validation_status::SIGNING_CREDENTIAL_TRUSTED));
+        .find(|status| status["code"] == validation_status::SIGNING_CREDENTIAL_TRUSTED)
+        .unwrap();
+    assert_eq!(trusted["explanation"], "signing certificate trusted");
     assert_eq!(results.get("trustListUri"), None);
 
     Ok(())
