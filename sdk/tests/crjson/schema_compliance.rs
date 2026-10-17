@@ -547,7 +547,7 @@ fn test_signature_structure() -> Result<()> {
 // ── Validation results ────────────────────────────────────────────────────────
 
 /// Every manifest's `validationResults` must have `success`, `informational`, `failure` arrays,
-/// a `specVersion` of "2.3", and a required `validationTime` RFC 3339 string.
+/// a `specVersion` of "2.4", and a required `validationTime` RFC 3339 string.
 #[test]
 fn test_validation_results_structure() -> Result<()> {
     let reader = Reader::default().with_stream("image/jpeg", Cursor::new(IMAGE_WITH_MANIFEST))?;
@@ -575,14 +575,14 @@ fn test_validation_results_structure() -> Result<()> {
             }
         }
 
-        // specVersion must be present and equal "2.3".
+        // specVersion must be present and equal "2.4".
         let spec_version = vr
             .get("specVersion")
             .and_then(|v| v.as_str())
             .expect("validationResults.specVersion must be a string");
         assert_eq!(
-            spec_version, "2.3.0",
-            "validationResults.specVersion must be \"2.3.0\""
+            spec_version, "2.4.0",
+            "validationResults.specVersion must be \"2.4.0\""
         );
 
         // validationTime must be present and be an RFC 3339 string.
@@ -641,12 +641,12 @@ fn test_validation_results_spec_version_wrong_value() -> Result<()> {
             *vr.get_mut("specVersion").unwrap() = serde_json::json!("9.9.9");
             assert_ne!(
                 vr["specVersion"].as_str().unwrap(),
-                "2.3",
-                "mutated specVersion should not equal 2.3"
+                "2.4",
+                "mutated specVersion should not equal 2.4"
             );
             // Restore and confirm it's back to the correct value.
             *vr.get_mut("specVersion").unwrap() = serde_json::json!(original);
-            assert_eq!(vr["specVersion"].as_str().unwrap(), "2.3.0");
+            assert_eq!(vr["specVersion"].as_str().unwrap(), "2.4.0");
         }
     }
     Ok(())
