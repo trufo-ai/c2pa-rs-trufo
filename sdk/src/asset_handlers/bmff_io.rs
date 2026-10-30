@@ -1087,8 +1087,9 @@ fn adjust_known_offsets<W: Write + ReadSeek + ?Sized>(
                     }
                 };
 
-                // patch the offsets if needed
-                if construction_method == 0 {
+                // patch the offsets if needed; a zero base_offset leaves the file position in the
+                // extent_offsets, which are patched below instead
+                if construction_method == 0 && base_offset != 0 {
                     // file offset construction method
                     if base_offset_size == 4 {
                         let new_offset = if adjust < 0 {
@@ -1132,11 +1133,17 @@ fn adjust_known_offsets<W: Write + ReadSeek + ?Sized>(
 
                 // consume the extents
                 for _e in 0..extent_count {
-                    let _extent_index = if version == 1 || (version == 2 && index_size > 0) {
-                        match base_offset_size {
+                    // item_reference_index is only present for version 1 or 2 when index_size > 0,
+                    // and its width is index_size (not base_offset_size)
+                    let _extent_index = if (version == 1 || version == 2) && index_size > 0 {
+                        match index_size {
                             4 => Some(output.read_u32::<BigEndian>()? as u64),
                             8 => Some(output.read_u64::<BigEndian>()?),
-                            _ => None,
+                            _ => {
+                                return Err(Error::InvalidAsset(
+                                    "Bad BMFF: unknown iloc index size".to_string(),
+                                ))
+                            }
                         }
                     } else {
                         None
@@ -3682,6 +3689,183 @@ pub mod tests {
         let mut cursor = Cursor::new(Vec::<u8>::new());
         let big_neg: i64 = (i32::MIN as i64) - 1;
         adjust_known_offsets(&mut cursor, &arena, &map, big_neg).unwrap();
+    }
+
+    // Regression: `adjust_known_offsets` read an iloc extent's item_reference_index in every
+    // version-1 box, base_offset_size bytes wide; ISO/IEC 14496-12 §8.11.3 reads it in version 1
+    // or 2 only when index_size > 0, index_size bytes wide. Version-1 HEIF grids and overlays
+    // then failed to sign or were corrupted. A zero base_offset with base_offset_size > 0 was
+    // also shifted along with its extent_offsets, moving those items twice.
+
+    fn bmff_box(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        [
+            &(8 + payload.len() as u32).to_be_bytes()[..],
+            &fourcc[..],
+            payload,
+        ]
+        .concat()
+    }
+
+    // big-endian iloc field of 0, 4 or 8 bytes
+    fn iloc_field(value: u64, size: u8) -> Vec<u8> {
+        value.to_be_bytes()[8 - size as usize..].to_vec()
+    }
+
+    /// Builds a minimal HEIF (`ftyp`, optional C2PA box, `meta` with `iloc` and `idat`, `mdat`)
+    /// with one single-extent item per `(construction_method, data)`: method 0 data goes in
+    /// `mdat`, method 1 data in `idat`. With `base_holds_position`, a method-0 item's base_offset
+    /// is its file position and its extent_offset 0; otherwise the extent_offset holds it.
+    fn heif_with_items(
+        version: u8,
+        base_offset_size: u8,
+        index_size: u8,
+        base_holds_position: bool,
+        store: Option<&[u8]>,
+        items: &[(u16, &[u8])],
+    ) -> Vec<u8> {
+        let ftyp = bmff_box(b"ftyp", b"heic\0\0\0\0mif1");
+        let mut c2pa = Vec::new();
+        if let Some(store) = store {
+            write_c2pa_box(&mut c2pa, store, MANIFEST, &[], 0).unwrap();
+        }
+        let meta = |mdat_data_start: u64| {
+            let mut iloc = vec![version, 0, 0, 0, 0x44, base_offset_size << 4 | index_size];
+            iloc.extend((items.len() as u16).to_be_bytes());
+            let (mut file_position, mut idat) = (mdat_data_start, Vec::new());
+            for (item_id, (method, data)) in (1u16..).zip(items) {
+                let position = if *method == 0 {
+                    file_position
+                } else {
+                    idat.len() as u64
+                };
+                let (base, offset) = if *method == 0 && base_holds_position {
+                    (position, 0)
+                } else {
+                    (0, position)
+                };
+                iloc.extend(item_id.to_be_bytes());
+                if version > 0 {
+                    iloc.extend(method.to_be_bytes());
+                }
+                iloc.extend(0u16.to_be_bytes()); // data_reference_index
+                iloc.extend(iloc_field(base, base_offset_size));
+                iloc.extend(1u16.to_be_bytes()); // extent_count
+                if version > 0 {
+                    iloc.extend(iloc_field(u64::from(item_id), index_size));
+                }
+                iloc.extend(iloc_field(offset, 4));
+                iloc.extend(iloc_field(data.len() as u64, 4));
+                if *method == 0 {
+                    file_position += data.len() as u64;
+                } else {
+                    idat.extend_from_slice(data);
+                }
+            }
+            let children = [bmff_box(b"iloc", &iloc), bmff_box(b"idat", &idat)].concat();
+            bmff_box(b"meta", &[&[0u8; 4][..], &children[..]].concat())
+        };
+        let mdat_data_start = (ftyp.len() + c2pa.len() + meta(0).len() + 8) as u64;
+        let mdat: Vec<u8> = items
+            .iter()
+            .filter(|(method, _)| *method == 0)
+            .flat_map(|(_, data)| data.to_vec())
+            .collect();
+        [ftyp, c2pa, meta(mdat_data_start), bmff_box(b"mdat", &mdat)].concat()
+    }
+
+    // the payload of the first `fourcc` box in a run of boxes
+    fn box_payload<'a>(boxes: &'a [u8], fourcc: &[u8; 4]) -> &'a [u8] {
+        let size = u32::from_be_bytes(boxes[..4].try_into().unwrap()) as usize;
+        if &boxes[4..8] == fourcc {
+            &boxes[8..size]
+        } else {
+            box_payload(&boxes[size..], fourcc)
+        }
+    }
+
+    /// Reads every iloc item's data back through its offsets.
+    fn iloc_item_data(file: &[u8]) -> Vec<Vec<u8>> {
+        let meta_children = &box_payload(file, b"meta")[4..];
+        let idat = box_payload(meta_children, b"idat");
+        let mut reader = Cursor::new(box_payload(meta_children, b"iloc"));
+        let mut field = |size: u8| match size {
+            0 => 0,
+            2 => u64::from(reader.read_u16::<BigEndian>().unwrap()),
+            4 => u64::from(reader.read_u32::<BigEndian>().unwrap()),
+            8 => reader.read_u64::<BigEndian>().unwrap(),
+            _ => panic!("bad iloc field size {size}"),
+        };
+        let version = field(4) >> 24;
+        let sizes = field(2);
+        let size = |shift: u64| (sizes >> shift & 0xf) as u8;
+        let id_size = if version < 2 { 2 } else { 4 };
+        let mut items = Vec::new();
+        for _ in 0..field(id_size) {
+            field(id_size); // item_ID
+            let method = if version > 0 { field(2) & 0xf } else { 0 };
+            field(2); // data_reference_index
+            let base = field(size(4));
+            let mut data = Vec::new();
+            for _ in 0..field(2) {
+                if version > 0 {
+                    field(size(0)); // item_reference_index
+                }
+                let start = (base + field(size(12))) as usize;
+                let end = start + field(size(8)) as usize;
+                let source = if method == 0 { file } else { idat };
+                data.extend_from_slice(source.get(start..end).expect("extent outside its source"));
+            }
+            items.push(data);
+        }
+        items
+    }
+
+    // writes a manifest store, rewrites it smaller, then removes it; every item's data must
+    // survive each offset adjustment and removal must leave `unsigned`
+    fn assert_iloc_items_survive(start: &[u8], unsigned: &[u8], items: &[(u16, &[u8])]) {
+        let expected: Vec<Vec<u8>> = items.iter().map(|(_, data)| data.to_vec()).collect();
+        assert_eq!(iloc_item_data(start), expected);
+
+        let bmff_io = BmffIO::new("heic");
+        let mut current = start.to_vec();
+        for store in [vec![1u8; 4000], vec![2u8; 100]] {
+            let mut output = Cursor::new(Vec::new());
+            bmff_io
+                .write_c2pa(&mut Cursor::new(&current), &mut output, &store)
+                .unwrap();
+            current = output.into_inner();
+            assert_eq!(iloc_item_data(&current), expected);
+        }
+        let mut output = Cursor::new(Vec::new());
+        bmff_io
+            .remove_c2pa(&mut Cursor::new(&current), &mut output)
+            .unwrap();
+        assert_eq!(output.into_inner(), unsigned);
+    }
+
+    #[test]
+    fn test_iloc_version_1_without_index_keeps_items() {
+        let items: &[(u16, &[u8])] = &[(0, b"coded tile"), (1, b"grid in idat"), (0, b"tile two")];
+        let heif = heif_with_items(1, 4, 0, true, None, items);
+        assert_iloc_items_survive(&heif, &heif, items);
+    }
+
+    #[test]
+    fn test_iloc_version_1_with_4_byte_index_keeps_items() {
+        let items: &[(u16, &[u8])] = &[(0, b"coded tile"), (1, b"grid in idat"), (0, b"tile two")];
+        let heif = heif_with_items(1, 0, 4, false, None, items);
+        assert_iloc_items_survive(&heif, &heif, items);
+    }
+
+    #[test]
+    fn test_iloc_zero_base_offset_keeps_items() {
+        let items: &[(u16, &[u8])] = &[(0, b"primary image"), (0, b"exif block")];
+        let unsigned = heif_with_items(0, 4, 0, false, None, items);
+        assert_iloc_items_survive(&unsigned, &unsigned, items);
+
+        // a manifest already in place with the position in the extent_offsets, then shrunk
+        let signed = heif_with_items(0, 4, 0, false, Some(&[3u8; 4000]), items);
+        assert_iloc_items_survive(&signed, &unsigned, items);
     }
 
     /// The native sample reader must parse our real MP4/MOV fixtures (which carry
