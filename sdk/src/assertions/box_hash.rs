@@ -111,17 +111,25 @@ impl BoxMap {
     /// Builds a spec `BoxMap` (hash-bearing) from an [`AssetBoxHash::get_box_map`]
     /// entry (region-only), attaching the hash produced for that region and
     /// any spec-conformant `exclusions` computed for it (see [`BoxExclusion`]).
+    /// The manifest store's own entry is always excluded, with the one-zero-byte
+    /// hash of spec §18.7.1, whatever `hash` and the handler's flag say.
     fn from_asset_box_map(
         bm: AssetBoxMap,
         hash: Vec<u8>,
         alg: Option<String>,
         exclusions: Option<Vec<BoxExclusion>>,
     ) -> Self {
+        let is_store = bm.names == [C2PA_BOXHASH];
+        let (hash, excluded) = if is_store {
+            (vec![0], Some(true))
+        } else {
+            (hash, bm.excluded)
+        };
         BoxMap {
             names: bm.names,
             alg,
             hash: ByteBuf::from(hash),
-            excluded: bm.excluded,
+            excluded,
             exclusions,
             pad: ByteBuf::from(vec![]),
             range_start: bm.range_start,
@@ -742,6 +750,17 @@ mod tests {
     #[cfg(test)]
     use crate::{jumbf_io::get_assetio_handler_from_path, utils::test::fixture_path};
 
+    /// Asserts that the manifest store's own entry is excluded, with the one-zero-byte hash.
+    fn assert_store_entry_excluded(bh: &BoxHash) {
+        let store = bh
+            .boxes
+            .iter()
+            .find(|bm| bm.names == [C2PA_BOXHASH])
+            .unwrap();
+        assert_eq!(store.excluded, Some(true));
+        assert_eq!(store.hash.as_slice(), [0]);
+    }
+
     #[test]
     fn test_hash_verify_jpg() {
         let ap = fixture_path("CA.jpg");
@@ -758,6 +777,7 @@ mod tests {
         // generate box hashes
         bh.generate_box_hash_from_stream(&mut input, "sha256", bhp, false)
             .unwrap();
+        assert_store_entry_excluded(&bh);
 
         // see if they match reading
         bh.verify_stream_hash(&mut input, Some("sha256"), bhp)
@@ -780,6 +800,7 @@ mod tests {
         // generate box hashes
         bh.generate_box_hash_from_stream(&mut input, "sha256", bhp, true)
             .unwrap();
+        assert_store_entry_excluded(&bh);
 
         // see if they match reading
         bh.verify_stream_hash(&mut input, Some("sha256"), bhp)
