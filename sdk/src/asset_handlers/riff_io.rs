@@ -28,10 +28,11 @@ use crate::{
     utils::io_utils::stream_len,
 };
 
-static SUPPORTED_TYPES: [&str; 13] = [
+static SUPPORTED_TYPES: [&str; 15] = [
     "avi",
     "wav",
     "webp",
+    "ani",
     "image/webp",
     "image/x-webp",
     "audio/wav",
@@ -42,6 +43,7 @@ static SUPPORTED_TYPES: [&str; 13] = [
     "video/avi",
     "video/msvideo",
     "video/x-msvideo",
+    "application/x-navi-animation",
 ];
 
 const MAX_DEPTH: usize = 32; // max depth to search for VP8/VP8L chunks
@@ -386,13 +388,14 @@ impl AssetIO for RiffIO {
         &SUPPORTED_TYPES
     }
 
-    // RIFF covers three distinct sub-formats (WEBP/WAV/AVI), each needing its own MIME
+    // RIFF covers four distinct sub-formats (WEBP/WAV/AVI/ANI), each needing its own MIME
     // type, so the default single-MIME derivation from `supported_types()` doesn't apply.
     fn mime_type_map(&self) -> Vec<(String, String)> {
         [
             ("webp", "image/webp"),
             ("wav", "audio/wav"),
             ("avi", "video/avi"),
+            ("ani", "application/x-navi-animation"),
         ]
         .into_iter()
         .map(|(ext, mime)| (ext.to_string(), mime.to_string()))
@@ -603,11 +606,14 @@ pub mod tests {
     use std::{fs::File, panic, path::Path};
 
     use super::*;
-    use crate::utils::{
-        hash_utils::vec_compare,
-        io_utils::tempdirectory,
-        test::{fixture_path, temp_dir_path},
-        xmp_inmemory_utils::extract_provenance,
+    use crate::{
+        jumbf_io::get_assetio_handler,
+        utils::{
+            hash_utils::vec_compare,
+            io_utils::tempdirectory,
+            test::{fixture_path, temp_dir_path},
+            xmp_inmemory_utils::extract_provenance,
+        },
     };
 
     // test-only equivalent of the removed file-`Path`-based embed method
@@ -922,6 +928,44 @@ pub mod tests {
             riff_io.read_c2pa(&mut f),
             Err(Error::JumbfNotFound)
         ));
+    }
+
+    #[test]
+    fn test_write_ani() {
+        let ani = [
+            b"RIFF".as_slice(),
+            &72u32.to_le_bytes(), // "ACON" + anih (8 + 36) + LIST (8 + 16)
+            b"ACON",
+            b"anih",
+            &36u32.to_le_bytes(),
+            &[0; 36],
+            b"LIST",
+            &16u32.to_le_bytes(), // "fram" + icon (8 + 4)
+            b"fram",
+            b"icon",
+            &4u32.to_le_bytes(),
+            b"ICON",
+        ]
+        .concat();
+
+        let handler = get_assetio_handler("ani").unwrap();
+        let writer = handler.get_writer("application/x-navi-animation").unwrap();
+        let mut output = Cursor::new(Vec::new());
+        writer
+            .write_c2pa(&mut Cursor::new(&ani), &mut output, b"manifest")
+            .unwrap();
+
+        // the form type and original chunks are unchanged, the C2PA chunk follows them, and
+        // the RIFF size covers it
+        let bytes = output.get_ref();
+        assert_eq!(&bytes[8..ani.len()], &ani[8..]);
+        assert_eq!(&bytes[ani.len()..ani.len() + 4], b"C2PA");
+        assert_eq!(
+            u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize,
+            bytes.len() - 8
+        );
+        let read = handler.get_reader().read_c2pa(&mut output).unwrap();
+        assert_eq!(read, b"manifest");
     }
 
     #[test]
