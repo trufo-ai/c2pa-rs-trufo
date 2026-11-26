@@ -2380,7 +2380,8 @@ where
     Ok(data)
 }
 
-fn get_xmp_data<R>(mut asset_reader: &mut R) -> Option<Vec<u8>>
+// Returns the offset and length of the XMP data the first IFD points to.
+fn get_xmp_data_range<R>(asset_reader: &mut R) -> Option<(u64, u64)>
 where
     R: Read + Seek + ?Sized,
 {
@@ -2399,11 +2400,20 @@ where
         return None;
     }
 
-    // move read point to start of entry
     let decoded_offset = decode_offset(xmp_ifd_entry.value_offset, e, big_tiff).ok()?;
-    asset_reader.seek(SeekFrom::Start(decoded_offset)).ok()?;
+    Some((decoded_offset, xmp_ifd_entry.value_count))
+}
 
-    asset_reader.read_to_vec(xmp_ifd_entry.value_count).ok()
+fn get_xmp_data<R>(mut asset_reader: &mut R) -> Option<Vec<u8>>
+where
+    R: Read + Seek + ?Sized,
+{
+    let (offset, length) = get_xmp_data_range(asset_reader)?;
+
+    // move read point to start of entry
+    asset_reader.seek(SeekFrom::Start(offset)).ok()?;
+
+    asset_reader.read_to_vec(length).ok()
 }
 
 pub struct TiffIO {}
@@ -2713,13 +2723,31 @@ impl WriteXmp for TiffIO {
         let l = u64::try_from(xmp.len())
             .map_err(|_err| Error::InvalidAsset("value out of range".to_string()))?;
 
+        // The clone keeps the source's bytes where they are and writes the new XMP after
+        // them, so the XMP it replaces would stay in the file, unreferenced.
+        let replaced_xmp = get_xmp_data_range(input_stream);
+        input_stream.rewind()?;
+
         let entry = IfdClonedEntry {
             entry_tag: XMP_TAG,
             entry_type: IFDEntryType::Byte as u16,
             value_count: l,
             value_bytes: xmp.as_bytes().to_vec(),
         };
-        tiff_clone_with_tags(output_stream, input_stream, vec![entry])
+        tiff_clone_with_tags(output_stream, input_stream, vec![entry])?;
+
+        // Clear the replaced XMP. A value of up to 8 bytes is held in the IFD entry itself.
+        if let Some((offset, length)) = replaced_xmp.filter(|(_, length)| *length > 8) {
+            const ZEROS: [u8; 8192] = [0; 8192];
+            output_stream.seek(SeekFrom::Start(offset))?;
+            let mut remaining = length;
+            while remaining > 0 {
+                let count = remaining.min(ZEROS.len() as u64) as usize;
+                output_stream.write_all(&ZEROS[..count])?;
+                remaining -= count as u64;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -3094,6 +3122,19 @@ pub mod tests {
         assert_eq!(
             crate::utils::xmp_inmemory_utils::extract_provenance(&xmp),
             None
+        );
+
+        // the XMP that was replaced is cleared, so the reference is nowhere in the file
+        let stripped = stripped_stream.into_inner();
+        assert!(!stripped
+            .windows(url.len())
+            .any(|window| window == url.as_bytes()));
+        // and the image data the file points to is still read as before
+        let mut stripped_stream = Cursor::new(stripped);
+        let mut with_url_stream = std::fs::File::open(&output).unwrap();
+        assert_eq!(
+            map_tiff(&mut stripped_stream).unwrap().page_tokens.len(),
+            map_tiff(&mut with_url_stream).unwrap().page_tokens.len()
         );
     }
 
