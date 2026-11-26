@@ -604,7 +604,6 @@ pub trait RemoteManifestUrl {
     /// The default implementation returns [`Error::NotImplemented`]. The
     /// blanket impl for [`WriteXmp`] overrides this to read the current XMP,
     /// strip the reference, and write the result back.
-    #[allow(unused)] // Not public yet
     fn remove_remote_manifest_url(
         &self,
         _input_stream: &mut dyn ReadSeek,
@@ -653,7 +652,6 @@ impl<T: WriteXmp + C2paReader> RemoteManifestUrl for T {
             .and_then(extract_provenance)
     }
 
-    #[allow(unused)] // Not public yet
     fn remove_remote_manifest_url(
         &self,
         input_stream: &mut dyn ReadSeek,

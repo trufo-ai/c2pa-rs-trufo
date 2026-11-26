@@ -454,6 +454,22 @@ mod tests {
         assert_eq!(extract_provenance(&xmp), None);
     }
 
+    // A packet can carry the key as an rdf:Description attribute and as a child element,
+    // each naming a different manifest; removal leaves neither.
+    #[test]
+    fn remove_provenance_strips_attribute_and_element_forms() {
+        let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dc="http://purl.org/dc/elements/1.1/" dc:format="image/tiff" dcterms:provenance="https://example.com/first"><dcterms:provenance>https://example.com/second</dcterms:provenance></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        assert_eq!(
+            extract_provenance(xmp),
+            Some("https://example.com/first".to_string())
+        );
+
+        let removed = remove_provenance(xmp).expect("removing provenance");
+        assert_eq!(extract_provenance(&removed), None);
+        assert!(!removed.contains("dcterms:provenance"));
+        assert!(removed.contains(r#"dc:format="image/tiff""#));
+    }
+
     // Control: a complete trailer should still round-trip normally.
     #[test]
     fn add_xmp_key_full_trailer_still_works() {
