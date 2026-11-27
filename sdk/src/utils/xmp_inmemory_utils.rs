@@ -15,6 +15,7 @@ use std::{io::Cursor, str};
 
 use log::error;
 use quick_xml::{
+    escape::unescape,
     events::{BytesStart, Event},
     name::QName,
     Reader, Writer,
@@ -72,15 +73,20 @@ fn extract_xmp_key(xmp: &str, key: &str) -> Option<String> {
                         }
                     });
                     if let Some(Ok(attribute)) = value {
-                        if let Ok(s) = String::from_utf8(attribute.value.to_vec()) {
-                            return Some(s);
+                        if let Ok(s) = str::from_utf8(&attribute.value) {
+                            // the value is as written in the XML, with its entities
+                            if let Ok(s) = unescape(s) {
+                                return Some(s.into_owned());
+                            }
                         }
                     }
                 } else if e.name() == QName(key.as_bytes()) {
                     // tag case
                     if let Ok(s) = reader.read_text(e.name()) {
                         if let Ok(s) = s.decode() {
-                            return Some(s.into_owned());
+                            if let Ok(s) = unescape(&s) {
+                                return Some(s.into_owned());
+                            }
                         }
                     }
                 }
@@ -468,6 +474,21 @@ mod tests {
         assert_eq!(extract_provenance(&removed), None);
         assert!(!removed.contains("dcterms:provenance"));
         assert!(removed.contains(r#"dc:format="image/tiff""#));
+    }
+
+    // A URL is written into XML with its `&` escaped; the extracted value is the URL itself.
+    #[test]
+    fn extract_provenance_decodes_xml_entities() {
+        let url = "https://example.com/manifest?a=1&b=2";
+        let escaped = "https://example.com/manifest?a=1&amp;b=2";
+        let attribute = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dcterms="http://purl.org/dc/terms/" dcterms:provenance="{escaped}"/></rdf:RDF>"#
+        );
+        let element = format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dcterms="http://purl.org/dc/terms/"><dcterms:provenance>{escaped}</dcterms:provenance></rdf:Description></rdf:RDF>"#
+        );
+        assert_eq!(extract_provenance(&attribute), Some(url.to_string()));
+        assert_eq!(extract_provenance(&element), Some(url.to_string()));
     }
 
     // Control: a complete trailer should still round-trip normally.

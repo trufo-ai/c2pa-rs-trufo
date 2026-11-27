@@ -2726,6 +2726,7 @@ impl WriteXmp for TiffIO {
         // The clone keeps the source's bytes where they are and writes the new XMP after
         // them, so the XMP it replaces would stay in the file, unreferenced.
         let replaced_xmp = get_xmp_data_range(input_stream);
+        let source_length = input_stream.seek(SeekFrom::End(0))?;
         input_stream.rewind()?;
 
         let entry = IfdClonedEntry {
@@ -2736,8 +2737,15 @@ impl WriteXmp for TiffIO {
         };
         tiff_clone_with_tags(output_stream, input_stream, vec![entry])?;
 
-        // Clear the replaced XMP. A value of up to 8 bytes is held in the IFD entry itself.
-        if let Some((offset, length)) = replaced_xmp.filter(|(_, length)| *length > 8) {
+        // Clear the replaced XMP where it lies within the source. A value of up to 4 bytes,
+        // or 8 in a BigTIFF, is held in the IFD entry itself and is too short to matter.
+        let within_source = |(offset, length): &(u64, u64)| {
+            *length > 8
+                && offset
+                    .checked_add(*length)
+                    .is_some_and(|end| end <= source_length)
+        };
+        if let Some((offset, length)) = replaced_xmp.filter(within_source) {
             const ZEROS: [u8; 8192] = [0; 8192];
             output_stream.seek(SeekFrom::Start(offset))?;
             let mut remaining = length;
