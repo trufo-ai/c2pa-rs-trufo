@@ -1313,6 +1313,20 @@ impl Builder {
                 .ok_or(Error::IngredientNotFound);
         }
 
+        // A `manifest_data` reference names a manifest store kept outside the stream (a remote
+        // or sidecar manifest) that the caller added as a builder resource. Hand it to the
+        // ingredient so that it is validated against the stream as an embedded store would be.
+        if ingredient.manifest_data().is_none() {
+            let identifier = ingredient
+                .manifest_data_ref()
+                .map(|data_ref| data_ref.identifier.clone());
+            if let Some(identifier) = identifier {
+                if let Ok(manifest_data) = self.resources.get(&identifier) {
+                    ingredient.set_manifest_data(manifest_data.into_owned())?;
+                }
+            }
+        }
+
         let ingredient = if _sync {
             ingredient.with_stream(format, stream, &self.context)?
         } else {
@@ -6838,10 +6852,22 @@ mod tests {
             )
             .unwrap();
 
-        builder
+        let ingredient = builder
             .add_ingredient_from_stream_async(parent_json, "image/jpeg", &mut cloud_image)
             .await
             .unwrap();
+
+        // the cloud manifest is validated against the stream, not recorded as inaccessible
+        let validation_results = ingredient.validation_results().unwrap();
+        let active_manifest = validation_results.active_manifest().unwrap();
+        assert!(!active_manifest
+            .failure()
+            .iter()
+            .any(|status| status.code() == crate::validation_status::MANIFEST_INACCESSIBLE));
+        assert!(active_manifest
+            .success()
+            .iter()
+            .any(|status| status.code() == crate::validation_status::ASSERTION_DATAHASH_MATCH));
 
         builder
             .add_assertion("org.test.assertion", &"assertion".to_string())

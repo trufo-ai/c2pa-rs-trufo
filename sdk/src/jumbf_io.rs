@@ -138,6 +138,23 @@ pub fn save_jumbf_to_stream(
     }
 }
 
+/// removes the reference to a remote manifest (the XMP dcterms:provenance key) from an asset
+/// reads an asset of asset_type from reader and writes it to writer without the reference,
+/// whether the key is an rdf:Description attribute, a child element, or both
+/// an asset with no XMP is written with a minimal XMP packet
+pub fn remove_remote_manifest_url_from_stream(
+    asset_type: &str,
+    input_stream: &mut dyn ReadSeek,
+    output_stream: &mut dyn ReadWriteSeek,
+) -> Result<()> {
+    match get_assetio_handler(asset_type).and_then(|handler| handler.remote_manifest_url_ref()) {
+        Some(remote_ref_handler) => {
+            remote_ref_handler.remove_remote_manifest_url(input_stream, output_stream)
+        }
+        None => Err(Error::UnsupportedType),
+    }
+}
+
 /// writes the jumbf data in store_bytes into an asset in data and returns the newly created asset
 pub fn save_jumbf_to_memory(asset_type: &str, data: &[u8], store_bytes: &[u8]) -> Result<Vec<u8>> {
     let mut input_stream = Cursor::new(data);
@@ -420,6 +437,13 @@ pub mod tests {
         writer.set_position(0);
         let loaded = remote_ref_writer.read_manifest_url(&mut writer).unwrap();
         assert_eq!(loaded, REMOTE_URL.to_string());
+
+        // test removing the remote reference
+        writer.set_position(0);
+        let mut removed = Cursor::new(Vec::new());
+        remove_remote_manifest_url_from_stream(asset_type, &mut writer, &mut removed).unwrap();
+        removed.set_position(0);
+        assert!(remote_ref_writer.read_manifest_url(&mut removed).is_none());
     }
 
     #[test]
